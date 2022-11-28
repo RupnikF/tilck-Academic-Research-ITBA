@@ -12,6 +12,7 @@
 #include <tilck/kernel/self_tests.h>
 #include <tilck/kernel/timer.h>
 
+
 static struct ksem test_sem;
 
 enum sem_test_state {
@@ -35,6 +36,91 @@ static struct sem_test_data sem_test_waiters[] =
    { 5, NOT_STARTED, -1 },
    { 10, NOT_STARTED, -1 },
 };
+
+
+
+
+#define TABLE_SIZE 6
+static struct ksem seat_sem;
+static int seat;
+static unsigned char table[TABLE_SIZE];
+static struct ksem eatingSemaphores[TABLE_SIZE];
+
+static void sitAndEat()
+{
+   ksem_wait(&seat_sem, 1, -1);
+   int local_seat = seat;
+   seat++;
+   printk("Grabbing seat %d\n",local_seat);
+   ksem_signal(&seat_sem,1);
+
+
+   struct ksem *left = &eatingSemaphores[local_seat];
+   struct ksem *right = &eatingSemaphores[(local_seat+1)%TABLE_SIZE];
+
+   while(1) {
+      switch(local_seat%2)
+      {
+         case 0:
+            printk("Starting to wait %d\n",local_seat);
+            ksem_wait(left,1,-1);
+            ksem_wait(right,1,-1);
+            break;
+         case 1:
+            printk("Starting to wait %d\n",local_seat);
+            ksem_wait(right,1,-1);
+            ksem_wait(left,1,-1);
+            break;
+      }
+      printk("Seat number: %d taken of %d\n",local_seat,seat);
+      table[local_seat] = 'E';
+      int j = 0;
+      while(j<TABLE_SIZE)
+         printk("%c ", table[j++]);
+      printk("\n");
+      int i = 0;
+      while(i<100000000) i++;
+      table[local_seat] = '-';
+      switch(local_seat%2)
+      {
+         case 0:
+            ksem_signal(left,1);
+            ksem_signal(right,1);
+            break;
+         case 1:
+            ksem_signal(right,1);
+            ksem_signal(left,1);
+            break;
+      }
+      printk("Dropped both sems %d\n", local_seat);
+      while(i<1000000000) i++;
+   }
+}
+
+static int philo()
+{
+   seat=0;
+   ksem_init(&seat_sem, 0, 1000);
+
+   int i = 0;
+   while(i< TABLE_SIZE){
+      table[i] = '-';
+      ksem_init(&eatingSemaphores[i++], 1, 1000);
+   }
+
+   i = 0;
+   while(i < TABLE_SIZE){
+      if(kthread_create(&sitAndEat, 0, NULL)<0)
+         panic("Unable to create a thread for sitAndEat()");
+      i++;
+   }
+   printk("philo finished\n");
+   ksem_signal(&seat_sem,1);
+
+   while(true) i++;
+
+   return 0;
+}
 
 static void ksem_test_wait_thread(void *arg)
 {
@@ -104,7 +190,8 @@ void selftest_ksem()
 {
    int tid, rc;
    ksem_init(&test_sem, 0, 1000);
-
+   philo();
+   return;
    printk("Running the wait threads...\n");
    disable_preemption();
    {
@@ -178,3 +265,4 @@ void selftest_ksem()
 }
 
 REGISTER_SELF_TEST(ksem, se_short, &selftest_ksem)
+
